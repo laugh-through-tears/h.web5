@@ -1,50 +1,67 @@
-import datetime
-import asyncio
 import aiohttp
-import json
+import asyncio
+from datetime import datetime, timedelta
 
-API_URL = "https://api.privatbank.ua/p24api/pubinfo?json&exchange&coursid=5"
+class CurrencyConverter:
+    async def fetch_exchange_rate(self, date):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f'https://api.privatbank.ua/p24api/exchange_rates?json&date={date}') as response:
+                return await response.json()
 
+    async def fetch_rates_for_last_n_days(self, n):
+        today = datetime.today()
+        rates = []
+        for i in range(n):
+            date = (today - timedelta(days=i)).strftime('%d.%m.%Y')
+            data = await self.fetch_exchange_rate(date)
+            rates.append({date: data})
+        return rates
 
-async def get_rates(days):
-    """
-    Отримати курси валют за останні `days` днів.
+    async def get_currency_rates(self, n_days):
+        rates = await self.fetch_rates_for_last_n_days(n_days)
 
-    Args:
-        days: Кількість днів (не більше 10).
+        formatted_rates = []
+        for rate_data in rates:
+            date, data = rate_data.popitem()
+            currencies = data['exchangeRate']
+            usd_rate = next((currency for currency in currencies if currency['currency'] == 'USD'), None)
+            eur_rate = next((currency for currency in currencies if currency['currency'] == 'EUR'), None)
 
-    Returns:
-        Список курсів валют.
-    """
-    if days > 10:
-        raise ValueError("Кількість днів не може бути більше 10")
+            if usd_rate and eur_rate:
+                formatted_rate = {
+                    date: {
+                        'USD': {
+                            'sale': usd_rate['saleRateNB'],
+                            'purchase': usd_rate['purchaseRateNB']
+                        },
+                        'EUR': {
+                            'sale': eur_rate['saleRateNB'],
+                            'purchase': eur_rate['purchaseRateNB']
+                        }
+                    }
+                }
+                formatted_rates.append(formatted_rate)
 
-    today = str(datetime.date.today())
-    start_date = str(datetime.date.today() - datetime.timedelta(days=days))
-
-    params = {"date": f"{start_date}-{today}"}
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(API_URL, params=params) as response:
-            response_data = await response.json()
-
-    return response_data
-
+        return formatted_rates
 
 async def main():
 
-    days = int(input("Введіть кількість днів (не більше 10): "))
-
     try:
-        rates = await get_rates(days)
-    except ValueError as e:
-        print(e)
-    except Exception as e:
-        print(f"Помилка при отриманні даних: {e}")
-    else:
-        print(json.dumps(rates, indent=2))
+        import sys
+        n_days = int(sys.argv[1]) if len(sys.argv) > 1 else 10
+        if n_days > 10:
+            print("Error: Cannot fetch rates for more than the last 10 days")
+            return
+    except ValueError:
+        print("Error: Invalid input")
+        return
 
+    converter = CurrencyConverter()
+    currency_rates = await converter.get_currency_rates(n_days)
+    print(currency_rates)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
+
 
